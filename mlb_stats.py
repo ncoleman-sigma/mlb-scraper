@@ -92,10 +92,10 @@ def resolve_team(mlb: mlbstatsapi.Mlb, team_name: str) -> tuple[int, str]:
     return team_id, team.name
 
 
-def extract_stat_row(player_name: str, position: str, stat_obj, fields: list) -> dict:
+def extract_stat_row(player_name: str, position: str, status: str, stat_obj, fields: list) -> dict:
     """Build a flat dict row from a split's stat Pydantic model."""
     stat_data = stat_obj.model_dump(exclude_none=True)
-    row = {"Player": player_name, "Position": position}
+    row = {"Player": player_name, "Position": position, "Status": status}
     for api_key, csv_col in fields:
         row[csv_col] = stat_data.get(api_key, "")
     return row
@@ -168,12 +168,12 @@ def main() -> None:
         raise
     print(f"  Found: {canonical_name} (ID: {team_id})")
 
-    print(f"Fetching {args.season} roster ...")
-    roster = mlb.get_team_roster(team_id, season=args.season)
+    print(f"Fetching {args.season} 40-man roster ...")
+    roster = mlb.get_team_roster(team_id, rosterType="40Man", season=args.season)
     if not roster:
         print(f"No roster data found for {canonical_name} ({args.season}).", file=sys.stderr)
         sys.exit(1)
-    print(f"  {len(roster)} players on roster.")
+    print(f"  {len(roster)} players on roster (40-man, including IL).")
 
     batting_rows: list[dict] = []
     pitching_rows: list[dict] = []
@@ -184,8 +184,9 @@ def main() -> None:
         player_id = roster_player.id
         player_name = roster_player.full_name
         position = getattr(roster_player.primary_position, "abbreviation", "")
+        status = getattr(roster_player.status, "description", "Active")
 
-        print(f"  [{i:>2}/{len(roster)}] {player_name} ({position}) ...", end=" ", flush=True)
+        print(f"  [{i:>2}/{len(roster)}] {player_name} ({position}) [{status}] ...", end=" ", flush=True)
 
         try:
             stat_dict = mlb.get_player_stats(
@@ -206,7 +207,7 @@ def main() -> None:
         season_hitting = hitting.get("season")
         if season_hitting and season_hitting.splits:
             for split in season_hitting.splits:
-                row = extract_stat_row(player_name, position, split.stat, BATTING_FIELDS)
+                row = extract_stat_row(player_name, position, status, split.stat, BATTING_FIELDS)
                 batting_rows.append(row)
             hit_added = True
 
@@ -214,7 +215,7 @@ def main() -> None:
         season_pitching = pitching.get("season")
         if season_pitching and season_pitching.splits:
             for split in season_pitching.splits:
-                row = extract_stat_row(player_name, position, split.stat, PITCHING_FIELDS)
+                row = extract_stat_row(player_name, position, status, split.stat, PITCHING_FIELDS)
                 pitching_rows.append(row)
             pit_added = True
 
@@ -229,8 +230,8 @@ def main() -> None:
     batting_path = output_dir / f"{slug}_batting_{args.season}.csv"
     pitching_path = output_dir / f"{slug}_pitching_{args.season}.csv"
 
-    batting_headers = ["Player", "Position"] + [col for _, col in BATTING_FIELDS]
-    pitching_headers = ["Player", "Position"] + [col for _, col in PITCHING_FIELDS]
+    batting_headers = ["Player", "Position", "Status"] + [col for _, col in BATTING_FIELDS]
+    pitching_headers = ["Player", "Position", "Status"] + [col for _, col in PITCHING_FIELDS]
 
     print("\nWriting CSV files ...")
     write_csv(batting_rows, batting_headers, batting_path)
