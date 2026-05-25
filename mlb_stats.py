@@ -22,6 +22,10 @@ import requests
 import urllib3
 import mlbstatsapi
 
+MLB_API_BASE = "https://statsapi.mlb.com/api/v1"
+
+RISP_FIELDS = ["RISP_AB", "RISP_H", "RISP_RBI", "RISP_AVG", "RISP_OBP", "RISP_SLG", "RISP_OPS"]
+
 
 def _disable_ssl_verification() -> None:
     """Monkey-patch requests to skip SSL verification globally."""
@@ -99,6 +103,37 @@ def extract_stat_row(player_name: str, position: str, status: str, stat_obj, fie
     for api_key, csv_col in fields:
         row[csv_col] = stat_data.get(api_key, "")
     return row
+
+
+def fetch_risp_stats(player_id: int, season: int) -> dict:
+    """Return a dict of RISP batting stats for a player via a direct API call.
+
+    Uses the statSplits endpoint with sitCodes=risp, which is not exposed by
+    the python-mlb-statsapi wrapper. Returns empty strings for all fields when
+    the player has no RISP plate appearances this season.
+    """
+    empty = {f: "" for f in RISP_FIELDS}
+    try:
+        resp = requests.get(
+            f"{MLB_API_BASE}/people/{player_id}/stats",
+            params={"stats": "statSplits", "group": "hitting", "season": season, "sitCodes": "risp"},
+        )
+        resp.raise_for_status()
+        stats = resp.json().get("stats", [])
+        if not stats or not stats[0].get("splits"):
+            return empty
+        stat = stats[0]["splits"][0]["stat"]
+        return {
+            "RISP_AB":  stat.get("atBats", ""),
+            "RISP_H":   stat.get("hits", ""),
+            "RISP_RBI": stat.get("rbi", ""),
+            "RISP_AVG": stat.get("avg", ""),
+            "RISP_OBP": stat.get("obp", ""),
+            "RISP_SLG": stat.get("slg", ""),
+            "RISP_OPS": stat.get("ops", ""),
+        }
+    except Exception:
+        return empty
 
 
 def write_csv(rows: list[dict], fieldnames: list[str], path: Path) -> None:
@@ -206,8 +241,10 @@ def main() -> None:
         hitting = stat_dict.get("hitting", {})
         season_hitting = hitting.get("season")
         if season_hitting and season_hitting.splits:
+            risp = fetch_risp_stats(player_id, args.season)
             for split in season_hitting.splits:
                 row = extract_stat_row(player_name, position, status, split.stat, BATTING_FIELDS)
+                row.update(risp)
                 batting_rows.append(row)
             hit_added = True
 
@@ -230,7 +267,7 @@ def main() -> None:
     batting_path = output_dir / f"{slug}_batting_{args.season}.csv"
     pitching_path = output_dir / f"{slug}_pitching_{args.season}.csv"
 
-    batting_headers = ["Player", "Position", "Status"] + [col for _, col in BATTING_FIELDS]
+    batting_headers = ["Player", "Position", "Status"] + [col for _, col in BATTING_FIELDS] + RISP_FIELDS
     pitching_headers = ["Player", "Position", "Status"] + [col for _, col in PITCHING_FIELDS]
 
     print("\nWriting CSV files ...")
