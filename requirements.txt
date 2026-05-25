@@ -1,1 +1,6 @@
 python-mlb-statsapi>=0.7.2
+snowflake-connector-python==3.10.1
+snowflake-snowpark-python==1.21.1
+pandas==2.2.2
+requests==2.31.0
+beautifulsoup4==4.12.3
