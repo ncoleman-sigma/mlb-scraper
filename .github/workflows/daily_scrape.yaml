@@ -1,4 +1,6 @@
 name: MLB Scraper → Snowflake
+run: python mlb_stats.py --team "New York Mets"
+
 
 on:
   schedule:
