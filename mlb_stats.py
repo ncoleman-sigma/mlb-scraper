@@ -22,6 +22,10 @@ import requests
 import urllib3
 import mlbstatsapi
 
+MLB_API_BASE = "https://statsapi.mlb.com/api/v1"
+
+RISP_FIELDS = ["RISP_AB", "RISP_H", "RISP_RBI", "RISP_AVG", "RISP_OBP", "RISP_SLG", "RISP_OPS"]
+
 
 def _disable_ssl_verification() -> None:
     """Monkey-patch requests to skip SSL verification globally."""
@@ -92,13 +96,44 @@ def resolve_team(mlb: mlbstatsapi.Mlb, team_name: str) -> tuple[int, str]:
     return team_id, team.name
 
 
-def extract_stat_row(player_name: str, position: str, stat_obj, fields: list) -> dict:
+def extract_stat_row(player_name: str, position: str, status: str, stat_obj, fields: list) -> dict:
     """Build a flat dict row from a split's stat Pydantic model."""
     stat_data = stat_obj.model_dump(exclude_none=True)
-    row = {"Player": player_name, "Position": position}
+    row = {"Player": player_name, "Position": position, "Status": status}
     for api_key, csv_col in fields:
         row[csv_col] = stat_data.get(api_key, "")
     return row
+
+
+def fetch_risp_stats(player_id: int, season: int) -> dict:
+    """Return a dict of RISP batting stats for a player via a direct API call.
+
+    Uses the statSplits endpoint with sitCodes=risp, which is not exposed by
+    the python-mlb-statsapi wrapper. Returns empty strings for all fields when
+    the player has no RISP plate appearances this season.
+    """
+    empty = {f: "" for f in RISP_FIELDS}
+    try:
+        resp = requests.get(
+            f"{MLB_API_BASE}/people/{player_id}/stats",
+            params={"stats": "statSplits", "group": "hitting", "season": season, "sitCodes": "risp"},
+        )
+        resp.raise_for_status()
+        stats = resp.json().get("stats", [])
+        if not stats or not stats[0].get("splits"):
+            return empty
+        stat = stats[0]["splits"][0]["stat"]
+        return {
+            "RISP_AB":  stat.get("atBats", ""),
+            "RISP_H":   stat.get("hits", ""),
+            "RISP_RBI": stat.get("rbi", ""),
+            "RISP_AVG": stat.get("avg", ""),
+            "RISP_OBP": stat.get("obp", ""),
+            "RISP_SLG": stat.get("slg", ""),
+            "RISP_OPS": stat.get("ops", ""),
+        }
+    except Exception:
+        return empty
 
 
 def write_csv(rows: list[dict], fieldnames: list[str], path: Path) -> None:
@@ -168,12 +203,12 @@ def main() -> None:
         raise
     print(f"  Found: {canonical_name} (ID: {team_id})")
 
-    print(f"Fetching {args.season} roster ...")
-    roster = mlb.get_team_roster(team_id, season=args.season)
+    print(f"Fetching {args.season} 40-man roster ...")
+    roster = mlb.get_team_roster(team_id, rosterType="40Man", season=args.season)
     if not roster:
         print(f"No roster data found for {canonical_name} ({args.season}).", file=sys.stderr)
         sys.exit(1)
-    print(f"  {len(roster)} players on roster.")
+    print(f"  {len(roster)} players on roster (40-man, including IL).")
 
     batting_rows: list[dict] = []
     pitching_rows: list[dict] = []
@@ -184,8 +219,9 @@ def main() -> None:
         player_id = roster_player.id
         player_name = roster_player.full_name
         position = getattr(roster_player.primary_position, "abbreviation", "")
+        status = getattr(roster_player.status, "description", "Active")
 
-        print(f"  [{i:>2}/{len(roster)}] {player_name} ({position}) ...", end=" ", flush=True)
+        print(f"  [{i:>2}/{len(roster)}] {player_name} ({position}) [{status}] ...", end=" ", flush=True)
 
         try:
             stat_dict = mlb.get_player_stats(
@@ -205,8 +241,10 @@ def main() -> None:
         hitting = stat_dict.get("hitting", {})
         season_hitting = hitting.get("season")
         if season_hitting and season_hitting.splits:
+            risp = fetch_risp_stats(player_id, args.season)
             for split in season_hitting.splits:
-                row = extract_stat_row(player_name, position, split.stat, BATTING_FIELDS)
+                row = extract_stat_row(player_name, position, status, split.stat, BATTING_FIELDS)
+                row.update(risp)
                 batting_rows.append(row)
             hit_added = True
 
@@ -214,7 +252,7 @@ def main() -> None:
         season_pitching = pitching.get("season")
         if season_pitching and season_pitching.splits:
             for split in season_pitching.splits:
-                row = extract_stat_row(player_name, position, split.stat, PITCHING_FIELDS)
+                row = extract_stat_row(player_name, position, status, split.stat, PITCHING_FIELDS)
                 pitching_rows.append(row)
             pit_added = True
 
@@ -229,8 +267,8 @@ def main() -> None:
     batting_path = output_dir / f"{slug}_batting_{args.season}.csv"
     pitching_path = output_dir / f"{slug}_pitching_{args.season}.csv"
 
-    batting_headers = ["Player", "Position"] + [col for _, col in BATTING_FIELDS]
-    pitching_headers = ["Player", "Position"] + [col for _, col in PITCHING_FIELDS]
+    batting_headers = ["Player", "Position", "Status"] + [col for _, col in BATTING_FIELDS] + RISP_FIELDS
+    pitching_headers = ["Player", "Position", "Status"] + [col for _, col in PITCHING_FIELDS]
 
     print("\nWriting CSV files ...")
     write_csv(batting_rows, batting_headers, batting_path)
