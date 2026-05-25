@@ -4,12 +4,12 @@ Fetches batting and pitching season stats for all players on a given team
 using the official MLB Stats API and writes them to CSV files.
 
 Usage:
-    python mlb_stats.py --team "New York Yankees"
+    python mlb_stats.py --team "New York Mets"
     python mlb_stats.py --team "Boston Red Sox" --season 2025 --output-dir ~/some/other/dir
 
 If you see an SSL certificate error (e.g. self-signed cert in chain from a
 corporate proxy), add the --no-verify-ssl flag:
-    python mlb_stats.py --team "New York Yankees" --no-verify-ssl
+    python mlb_stats.py --team "New York Mets" --no-verify-ssl
 """
 
 import argparse
@@ -185,7 +185,10 @@ def main() -> None:
 
     team_name = args.team
     if not team_name:
-        team_name = input("Enter team name (e.g. 'New York Yankees'): ").strip()
+        if len(sys.argv) > 1:
+            team_name = " ".join(sys.argv[1:]).strip()
+        else:
+            team_name = input("Enter team name (e.g. 'New York Mets'): ").strip()
         if not team_name:
             print("Error: Team name is required.", file=sys.stderr)
             sys.exit(1)
