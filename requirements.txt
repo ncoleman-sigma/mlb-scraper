@@ -1,0 +1,1 @@
+python-mlb-statsapi>=0.7.2
